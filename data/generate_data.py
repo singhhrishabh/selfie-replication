@@ -86,7 +86,7 @@ TOPICS = [
     "solving a rubik's cube"
 ]
 
-def generate_labels(model_name="Qwen/Qwen2.5-1.5B-Instruct"):
+def generate_labels(model_name="meta-llama/Llama-3.2-3B-Instruct"):
     print(f"Loading {model_name}...")
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -95,27 +95,37 @@ def generate_labels(model_name="Qwen/Qwen2.5-1.5B-Instruct"):
     dataset = []
 
     print(f"Generating labels for {len(TOPICS)} topics...")
+    
+    prompts = [
+        "Write a single, short sentence describing what '{}' is. Do not include any extra commentary.",
+        "Briefly explain '{}' in one simple sentence.",
+        "Give a one-sentence definition of '{}' for a beginner."
+    ]
+    
     for topic in tqdm(TOPICS):
-        prompt = f"Write a single, short sentence describing what '{topic}' is. Do not include any extra commentary."
-        messages = [
-            {"role": "user", "content": prompt}
-        ]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tokenizer(text, return_tensors="pt").to(device)
-        
-        with torch.no_grad():
-            outputs = model.generate(**inputs, max_new_tokens=40, temperature=0.7, do_sample=True, top_p=0.9, pad_token_id=tokenizer.eos_token_id)
-        
-        generated = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
-        
-        # Clean up output a bit
-        generated = generated.replace('"', '').strip()
-        if not generated:
-            generated = topic
+        labels = []
+        for prompt_template in prompts:
+            prompt = prompt_template.format(topic)
+            messages = [
+                {"role": "user", "content": prompt}
+            ]
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = tokenizer(text, return_tensors="pt").to(device)
             
+            with torch.no_grad():
+                outputs = model.generate(**inputs, max_new_tokens=40, temperature=0.7, do_sample=True, top_p=0.9, pad_token_id=tokenizer.eos_token_id)
+            
+            generated = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+            
+            # Clean up output a bit
+            generated = generated.replace('"', '').strip()
+            if not generated:
+                generated = topic
+            labels.append(generated)
+                
         dataset.append({
             "topic": topic,
-            "label": generated
+            "labels": labels
         })
 
     os.makedirs(os.path.dirname(os.path.abspath(__file__)), exist_ok=True)

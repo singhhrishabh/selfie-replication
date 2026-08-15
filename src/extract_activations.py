@@ -4,7 +4,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 
-def extract_activations(model_name="Qwen/Qwen2.5-1.5B-Instruct", layer_idx=14):
+def extract_activations(model_name="meta-llama/Llama-3.2-3B-Instruct", layer_idx=24):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Loading {model_name} on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)

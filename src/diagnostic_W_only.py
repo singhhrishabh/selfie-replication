@@ -3,6 +3,8 @@ import os
 import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm import tqdm
+import random
 
 class FullRankAffineAdapter(nn.Module):
     def __init__(self, d_model):
@@ -19,6 +21,14 @@ def run_diagnostic():
     
     data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
     
+    with open(os.path.join(data_dir, "split.json"), "r") as f:
+        split = json.load(f)
+    
+    test_indices = split["test"]
+    
+    with open(os.path.join(data_dir, "topics.json"), "r") as f:
+        dataset = json.load(f)
+        
     act_data = torch.load(os.path.join(data_dir, "activations.pt"))
     vectors = act_data["contrastive_vectors"]
     d_model = vectors.shape[1]
@@ -37,12 +47,7 @@ def run_diagnostic():
     ).to(device)
     model.eval()
     
-    print("\n--- Diagnostic: Zero Vector Injection ---")
-    
-    # Inject a zero vector into the adapter.
-    # Output should be just the learned bias b.
-    zero_vec = torch.zeros(d_model).to(device, dtype=torch.bfloat16 if device == "mps" else torch.float32)
-    adapted_vec = adapter(zero_vec)
+    print("\n--- Diagnostic: W(h) Only (No Bias) ---")
     
     placeholder_char = "X"
     x_token_id = tokenizer.encode(placeholder_char, add_special_tokens=False)
@@ -55,25 +60,32 @@ def run_diagnostic():
     full_ids = torch.tensor([prompt_ids]).to(device)
     
     base_embeds = model.get_input_embeddings()(full_ids)
-    inputs_embeds = base_embeds.clone()
-    
     placeholder_positions = [i for i, tid in enumerate(prompt_ids) if tid in x_token_id]
     
-    for pos in placeholder_positions:
-        inputs_embeds[0, pos] = adapted_vec
-            
-    with torch.no_grad():
-        outputs = model.generate(
-            inputs_embeds=inputs_embeds,
-            max_new_tokens=30,
-            pad_token_id=tokenizer.eos_token_id,
-            do_sample=False
-        )
+    for i in range(min(5, len(test_indices))):
+        idx = test_indices[i]
+        topic = dataset[idx]["topic"]
+        vec = vectors[idx].to(device, dtype=torch.bfloat16 if device == "mps" else torch.float32)
         
-    gen = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-    clean_gen = gen.split('"')[0].split('\n')[0].strip()
-    
-    print(f"Zero vector (pure bias) output: {clean_gen}")
+        # W(h) only
+        adapted_vec = adapter.W(vec)
+        
+        inputs_embeds = base_embeds.clone()
+        for pos in placeholder_positions:
+            inputs_embeds[0, pos] = adapted_vec
+                
+        with torch.no_grad():
+            outputs = model.generate(
+                inputs_embeds=inputs_embeds,
+                max_new_tokens=30,
+                pad_token_id=tokenizer.eos_token_id,
+                do_sample=False
+            )
+            
+        gen = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        clean_gen = gen.split('"')[0].split('\n')[0].strip()
+        
+        print(f"{topic:30s} -> {clean_gen}")
 
 if __name__ == "__main__":
     run_diagnostic()

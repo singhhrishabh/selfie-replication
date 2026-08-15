@@ -6,16 +6,18 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 import random
 
-class ScalarAffineAdapter(nn.Module):
+class FullRankAffineAdapter(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        self.alpha = nn.Parameter(torch.tensor(1.0))
+        self.W = nn.Linear(d_model, d_model, bias=False)
+        # Initialize near identity
+        self.W.weight.data = torch.eye(d_model) + torch.randn_like(self.W.weight.data) * 1e-4
         self.b = nn.Parameter(torch.zeros(d_model))
         
     def forward(self, h):
-        return self.alpha * h + self.b
+        return self.W(h) + self.b
 
-def train_adapter(model_name="Qwen/Qwen2.5-1.5B-Instruct", epochs=5, lr=1e-2):
+def train_adapter(model_name="meta-llama/Llama-3.2-3B-Instruct", epochs=5, lr=1e-3):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Loading {model_name} on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -50,13 +52,18 @@ def train_adapter(model_name="Qwen/Qwen2.5-1.5B-Instruct", epochs=5, lr=1e-2):
         json.dump({"train": train_indices, "test": test_indices}, f)
         
     # Setup adapter and optimizer
-    adapter = ScalarAffineAdapter(d_model).to(device, dtype=torch.bfloat16 if device == "mps" else torch.float32)
-    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr)
+    adapter = FullRankAffineAdapter(d_model).to(device, dtype=torch.bfloat16 if device == "mps" else torch.float32)
+    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr, weight_decay=1e-2)
     
     # Prepare prompt template
-    # We will use 'Ω' as a placeholder token (single token)
-    placeholder_char = "Ω"
-    placeholder_id = tokenizer.encode(placeholder_char, add_special_tokens=False)[0]
+    placeholder_char = "X"
+    x_token_id = tokenizer.encode(placeholder_char, add_special_tokens=False)
+    
+    messages = [{"role": "user", "content": f'What is the meaning of "{placeholder_char}"?'}]
+    prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt_text += f'The meaning of "{placeholder_char}" is "'
+    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    placeholder_positions = [i for i, tid in enumerate(prompt_ids) if tid in x_token_id]
     
     print(f"Training adapter on {len(train_indices)} examples...")
     
@@ -66,52 +73,45 @@ def train_adapter(model_name="Qwen/Qwen2.5-1.5B-Instruct", epochs=5, lr=1e-2):
         
         for idx in tqdm(train_indices, desc=f"Epoch {epoch+1}/{epochs}"):
             vec = vectors[idx]
-            label = dataset[idx]["label"]
+            labels = dataset[idx]["labels"]
             
             # Adapted vector
             adapted_vec = adapter(vec)
             
-            # Format prompt with placeholder
-            messages = [{"role": "user", "content": f'What is the meaning of "{placeholder_char}"?'}]
-            prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            prompt_text += f'The meaning of "{placeholder_char}" is "'
+            # Calculate loss for each label, average them
+            idx_loss = 0.0
+            for label in labels:
+                label_ids = tokenizer.encode(label + '"', add_special_tokens=False)
+                full_ids = torch.tensor([prompt_ids + label_ids]).to(device)
+                
+                # Get base embeddings
+                inputs_embeds = model.get_input_embeddings()(full_ids).clone()
+                
+                # Inject adapted vector
+                for pos in placeholder_positions:
+                    inputs_embeds[0, pos] = adapted_vec
+                        
+                # Forward pass
+                outputs = model(inputs_embeds=inputs_embeds)
+                logits = outputs.logits
+                
+                shift_logits = logits[0, len(prompt_ids)-1 : -1, :].contiguous()
+                shift_labels = torch.tensor(label_ids).to(device)
+                
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(shift_logits, shift_labels)
+                idx_loss += loss
             
-            prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-            label_ids = tokenizer.encode(label + '"', add_special_tokens=False)
-            
-            full_ids = torch.tensor([prompt_ids + label_ids]).to(device)
-            
-            # Get base embeddings
-            inputs_embeds = model.get_input_embeddings()(full_ids)
-            
-            # Replace placeholder embeddings with adapted_vec
-            # Find all positions of placeholder_id in prompt_ids
-            for i, token_id in enumerate(prompt_ids):
-                if token_id == placeholder_id:
-                    inputs_embeds[0, i] = adapted_vec
-                    
-            # Forward pass
-            outputs = model(inputs_embeds=inputs_embeds)
-            logits = outputs.logits
-            
-            # Calculate cross entropy loss for the label tokens
-            # logits shape: (1, seq_len, vocab_size)
-            # We want to predict label_ids based on previous tokens
-            
-            shift_logits = logits[0, len(prompt_ids)-1 : -1, :].contiguous()
-            shift_labels = torch.tensor(label_ids).to(device)
-            
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits, shift_labels)
+            idx_loss = idx_loss / len(labels)
             
             optimizer.zero_grad()
-            loss.backward()
+            idx_loss.backward()
             optimizer.step()
             
-            epoch_loss += loss.item()
+            epoch_loss += idx_loss.item()
             
         print(f"Epoch {epoch+1} Loss: {epoch_loss / len(train_indices):.4f}")
-        print(f"Alpha: {adapter.alpha.item():.4f}, Bias Norm: {torch.norm(adapter.b).item():.4f}")
+        print(f"W Norm: {torch.norm(adapter.W.weight).item():.4f}, Bias Norm: {torch.norm(adapter.b).item():.4f}")
 
     # Save adapter
     torch.save(adapter.state_dict(), os.path.join(data_dir, "adapter.pt"))
