@@ -39,6 +39,29 @@ We re-ran our diagnostics on the Full-Rank Llama adapter to prove it didn't coll
 - **Zero-Vector Injection ($b$ only)**: The model output `"I apologize, but I don't have any information on that term."` — a perfect null fallback, proving the bias term learned to handle uncertainty rather than collapsing into a specific concept.
 - **W-Only Injection ($Wh$ without $b$)**: The model output highly semantic text (e.g. defining Microeconomics correctly), proving the matrix $W$ actively rotated the vector into a semantic space without relying on the bias.
 
+## How to Run
+
+To reproduce this pipeline, you must use a Hugging Face account with access to the Meta Llama 3.2 license.
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# 1. Authenticate with Hugging Face (Required for Llama-3.2)
+huggingface-cli login
+
+# 2. Core pipeline
+python data/generate_data.py       # Generate topic list + labels
+python src/extract_activations.py  # Extract contrastive vectors (layer 24)
+python src/train_adapter.py        # Train full-rank adapter
+python src/evaluate.py             # Evaluate + qualitative test
+
+# 3. Diagnostics
+python src/llama_layer_sweep.py    # Layer sweep proving native semantic capability
+python src/diagnostic_zero.py      # Zero-vector (bias-only) test
+python src/diagnostic_W_only.py    # W-only isolation test
+```
+
 ## Repository Structure
 
 - `src/`
