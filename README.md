@@ -1,4 +1,4 @@
-# SelfIE Replication: A Diagnosed Journey to Success
+# SelfIE Replication: Diagnosing Two Failure Modes Across Model Scale and Adapter Capacity
 
 The untrained base model reads its own contrastive vectors at 45.2% Recall@1 — but our trained full-rank adapter made this WORSE (24.2%), most likely by overfitting a 9.4M-parameter matrix on only ~750 training pairs.
 
@@ -6,7 +6,7 @@ This repository contains a full replication attempt of the "Learning Self-Interp
 
 ## The Journey
 
-Replicating state-of-the-art interpretability papers is rarely a straight line. Our journey took us through an initial failure, deep diagnostics, and ultimately a **highly successful replication**.
+Replicating state-of-the-art interpretability papers is rarely a straight line. Our journey took us through an initial failure, deep diagnostics, and two distinct, mechanistically-diagnosed failure modes — one from model scale, one from adapter overfitting — alongside a genuine positive finding about native semantic readability in the base model.
 
 ### 1. The Initial Failure (Qwen2.5-1.5B)
 We initially attempted to replicate the paper using `Qwen2.5-1.5B-Instruct` and a scalar-affine adapter ($f(h) = \alpha h + b$).
