@@ -1,5 +1,7 @@
 # SelfIE Replication: A Diagnosed Journey to Success
 
+The untrained base model reads its own contrastive vectors at 45.2% Recall@1 — but our trained full-rank adapter made this WORSE (24.2%), most likely by overfitting a 9.4M-parameter matrix on only ~750 training pairs.
+
 This repository contains a full replication attempt of the "Learning Self-Interpretation from Interpretability Artifacts" paper (arXiv:2602.10352v2), specifically focusing on Track A: linearly interpreting contrastive activation vectors using the model's own embedding space.
 
 ## The Journey
@@ -16,20 +18,20 @@ Guided by the diagnostics, we made two critical corrections to align with the pa
 1. **Model Switch**: We migrated to `meta-llama/Llama-3.2-3B-Instruct`, matching the model family the original authors utilized.
 2. **Adapter Architecture**: We implemented a Full-Rank Affine Adapter ($f(h) = Wh + b$) initialized near the identity matrix, which is the correct architecture specified in Section 3.2 for contrastive vectors.
 
-### 3. The Success
+### 3. A Genuine Finding — and an Overfitting Failure
 We extracted contrastive vectors from **Layer 24** of Llama-3.2-3B across 310 concepts, regenerating a multi-label synthetic dataset (3 labels per concept).
 
-**The results were phenomenal:**
+**Finding 1: Llama-3.2-3B natively encodes linearly-readable topic semantics**
 - **Untrained SelfIE Recall@1**: **45.2%** (Recall@10 = 59.7%)
-- **Trained Full-Rank Adapter Recall@1**: 24.2%
+- The untrained Llama-3.2-3B model was natively able to interpret its own contrastive vectors with 45.2% accuracy on a held-out test set. For example, when injecting the contrastive vector for the topic "DNA replication" directly into the embedding layer, the model output: `"deoxyribonucleic acid."` This validates the core premise that contrastive vectors natively encode linearly readable semantics.
+
+**Finding 2: Our full-rank adapter overfit and degraded performance relative to baseline**
+- **Trained Full-Rank Adapter Recall@1**: **24.2%**
+- The fact that the untrained model outperformed the trained adapter implies that the full-rank $3072 \times 3072$ matrix overfit on our small synthetic dataset, whereas the paper trained on massive datasets.
 
 ![Recall@1 Comparison](assets/recall_comparison.png)
 
 ![Recall@10 Comparison](assets/recall10_comparison.png)
-
-**What this means:** The untrained Llama-3.2-3B model was natively able to interpret its own contrastive vectors with 45.2% accuracy on a held-out test set! For example, when injecting the contrastive vector for the topic "DNA replication" directly into the embedding layer, the model output: `"deoxyribonucleic acid."` 
-
-The fact that the untrained model outperformed the trained adapter implies that the full-rank $3072 \times 3072$ matrix overfit on our small 310-topic synthetic dataset, whereas the paper trained on massive datasets. But the core premise — that contrastive vectors natively encode linearly readable semantics — was beautifully validated.
 
 ## Diagnostic Evidence
 
